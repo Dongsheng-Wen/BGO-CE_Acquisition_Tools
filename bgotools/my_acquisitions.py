@@ -51,15 +51,17 @@ class EI_below_hull:
         elif v_s< 1e-10:
             v_s = 1e-10
 
+        # GPy's model.predict returns the variance; EI needs the standard deviation
+        s_s = np.sqrt(v_s)
         if self.mode == 'min':
             # find the function minimum.
-            u = (fmins - m_s - self.xi) / v_s
+            u = (fmins - m_s - self.xi) / s_s
         elif self.mode == 'max':
             # find the function maximum.
-            u = (m_s - fmins - self.xi) / v_s
+            u = (m_s - fmins - self.xi) / s_s
         else:
             print('I do not know what to do with mode %s' %self.mode)
-        self.ei = v_s * (u * stats.norm.cdf(u) + stats.norm.pdf(u))
+        self.ei = s_s * (u * stats.norm.cdf(u) + stats.norm.pdf(u))
         
         return (self.ei)
 
@@ -218,14 +220,16 @@ class EI_global_min:
         elif v_s< 1e-10:
             v_s = 1e-10
 
+        # GPy's model.predict returns the variance; EI needs the standard deviation
+        s_s = np.sqrt(v_s)
         if self.mode == 'min':
             # find the function minimum.
-            u = (fmins - m_s - self.xi) / v_s
+            u = (fmins - m_s - self.xi) / s_s
         elif self.mode == 'max':
             # find the function maximum.
-            u = (m_s - fmins - self.xi) / v_s
+            u = (m_s - fmins - self.xi) / s_s
         else:
             print('I do not know what to do with mode %s' %self.mode)
-        self.ei = v_s * (u * stats.norm.cdf(u) + stats.norm.pdf(u))
+        self.ei = s_s * (u * stats.norm.cdf(u) + stats.norm.pdf(u))
         
         return (self.ei)
