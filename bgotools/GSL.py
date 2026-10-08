@@ -3,7 +3,7 @@ class GSL:
     def __init__(self,data,model=None):
         def f(x):
             try:
-                return np.float(x)
+                return float(x)
             except:
                 return np.nan
         self.data = data

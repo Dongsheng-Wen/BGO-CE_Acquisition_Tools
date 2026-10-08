@@ -5,6 +5,6 @@ class preprocess:
 
     def str2nan(self):
         try:
-            return np.float(x)
+            return float(x)
         except:
             return np.nan
