@@ -167,8 +167,11 @@ class my_hull_funcs:
             
             self.Delta_X = x_i_2 - x_i_1
             #print(np.dot(Delta_X,y))
-            self.Area = .5*np.abs(np.dot(self.Delta_X,y))
-            self.nu_Area = .25*np.dot(np.dot(self.Delta_X,self.nu_y_matrix_hull),self.Delta_X)
+            self.Area = 0.5*np.abs(np.dot(self.Delta_X,y))
+            # it is the variance not standard deviation here
+            # standard deviation is used later, just for my convenience of using it with the old code...
+            self.nu_Area = 0.25*np.dot(np.dot(self.Delta_X,self.nu_y_matrix_hull),self.Delta_X)
+
             #return self.Area,self.nu_Area
 
         else:
@@ -321,16 +324,16 @@ class my_hull_funcs:
 # class :
 class my_nd_hull_funcs:
 
-    def __init__(self,points,E_nu=0):
-        """Independent composition fractions followed by energy; E_nu is variance.
-
+    def __init__(self,points,nu_E=0):
+        """Independent composition fractions followed by energy; nu_E is variance.
+        Multicomponent system: 
         For C components, points has C columns. Volume is measured in the
         C-1 independent fraction coordinates, whose simplex volume is 1/(C-1)!.
         The internal Qhull uses scaled formation energies; Area retains the
         input energy units, and bt_hull_points retains the input coordinates.
         """
         self.points = np.asarray(points,dtype=float)
-        self.E_nu = np.asarray(E_nu,dtype=float)
+        self.nu_E = np.asarray(nu_E,dtype=float)
         if self.points.ndim != 2 or self.points.shape[1] < 2 or not len(self.points):
             raise ValueError('points must contain composition columns and a final energy column')
         if not np.all(np.isfinite(self.points)):
@@ -338,18 +341,18 @@ class my_nd_hull_funcs:
         if np.any(self.points[:,:-1] < -1e-12) or np.any(self.points[:,:-1].sum(axis=1) > 1+1e-12):
             raise ValueError('composition fractions must lie inside the composition simplex')
         n = len(self.points)
-        if self.E_nu.shape not in ((),(n,),(n,1),(n,n)):
-            raise ValueError('E_nu must be a scalar variance, n variances, or an n by n covariance matrix')
-        if not np.all(np.isfinite(self.E_nu)):
-            raise ValueError('E_nu must be finite')
-        if self.E_nu.shape == (n,n):
-            if not np.allclose(self.E_nu,self.E_nu.T,rtol=1e-10,
-                               atol=64*np.finfo(float).eps*np.max(np.abs(self.E_nu))):
-                raise ValueError('E_nu covariance matrix must be symmetric')
-            if np.any(np.diag(self.E_nu) < 0):
-                raise ValueError('E_nu variances must be nonnegative')
-        elif np.any(self.E_nu < 0):
-            raise ValueError('E_nu variances must be nonnegative')
+        if self.nu_E.shape not in ((),(n,),(n,1),(n,n)):
+            raise ValueError('nu_E must be a scalar variance, n variances, or an n by n covariance matrix')
+        if not np.all(np.isfinite(self.nu_E)):
+            raise ValueError('nu_E must be finite')
+        if self.nu_E.shape == (n,n):
+            if not np.allclose(self.nu_E,self.nu_E.T,rtol=1e-10,
+                               atol=64*np.finfo(float).eps*np.max(np.abs(self.nu_E))):
+                raise ValueError('nu_E covariance matrix must be symmetric')
+            if np.any(np.diag(self.nu_E) < 0):
+                raise ValueError('nu_E variances must be nonnegative')
+        elif np.any(self.nu_E < 0):
+            raise ValueError('nu_E variances must be nonnegative')
 
     def get_bottom_hull(self):
         # The pure-endmember plane closes the lower hull.
@@ -408,17 +411,18 @@ class my_nd_hull_funcs:
         self.F_vector = F_vector[self.bt_hull_vertices]
         # The hull topology is fixed; propagate the existing linear energy
         # covariance without allocating a dense matrix for marginal variances.
-        if self.E_nu.ndim == 0:
-            self.var_Area = float(self.E_nu*np.dot(self.F_vector,self.F_vector))
+        if self.nu_E.ndim == 0:
+            self.var_Area = float(self.nu_E*np.dot(self.F_vector,self.F_vector))
             variance_scale = self.var_Area
-        elif self.E_nu.shape != (len(self.points),len(self.points)):
-            self.var_Area = float(np.dot(self.F_vector**2,self.E_nu.ravel()[self.bt_hull_vertices]))
+        elif self.nu_E.shape != (len(self.points),len(self.points)):
+            self.var_Area = float(np.dot(self.F_vector**2,self.nu_E.ravel()[self.bt_hull_vertices]))
             variance_scale = self.var_Area
         else:
-            covariance = self.E_nu[np.ix_(self.bt_hull_vertices,self.bt_hull_vertices)]
+            covariance = self.nu_E[np.ix_(self.bt_hull_vertices,self.bt_hull_vertices)]
             self.var_Area = float(np.dot(np.dot(self.F_vector,covariance),self.F_vector))
             variance_scale = np.dot(np.dot(np.abs(self.F_vector),np.abs(covariance)),np.abs(self.F_vector))
         if self.var_Area < -64*np.finfo(float).eps*variance_scale:
-            raise ValueError('E_nu gives a negative propagated hull variance')
+            raise ValueError('nu_E gives a negative propagated hull variance')
         self.var_Area = max(0.,self.var_Area)
+        # in here the standard deviation is the output, in previous hull_funcs nu_Area is variance
         self.nu_Area = np.sqrt(self.var_Area)
