@@ -122,12 +122,7 @@ class my_hull_funcs:
             hp_index = np.unique(np.array(self.final_simplices).flatten())
             self.bt_hull_points = self.points[hp_index]
             self.bt_hull_vertices = hp_index
-            self.bt_hull_index_all = []
-            for i in hp_index:# find the index in self.points_all
-                for j in range(len(self.points_all)):
-                    if np.linalg.norm(self.points_all[j]-self.points[i])==0:
-                        self.bt_hull_index_all.append(j)
-                        break
+            self.bt_hull_index_all = np.flatnonzero(self.get_mask())[hp_index].tolist()
     def find_plane_zero(self):
         p0 = np.where((self.points_all[:,0]==0)&(self.points_all[:,1]==0))[0][0]
         p1 = np.where((self.points_all[:,0]==1)&(self.points_all[:,1]==0))[0][0]
@@ -195,7 +190,7 @@ class my_hull_funcs:
             self.nu_z_matrix_hull = np.diag(np.zeros(len(z))) 
             for i in range(len(z)):
                 for j in range(len(z)):
-                    self.nu_z_matrix_hull[i,j] = self.nu_Z_matrix[self.bt_hull_vertices[i],self.bt_hull_vertices[j]]
+                    self.nu_z_matrix_hull[i,j] = self.nu_Z_matrix[self.bt_hull_index_all[i],self.bt_hull_index_all[j]]
             
             # get tetrahedrons of the 3d hull from Delauney triangulation
             self.delaunay = Delaunay(self.bt_hull_points)
@@ -325,15 +320,105 @@ class my_hull_funcs:
 
 # class :
 class my_nd_hull_funcs:
-    
+
     def __init__(self,points,E_nu=0):
-        # points
-        # n x m array, n rows of configurations; m columns of coordinates, the last column is Energy
-        self.points = points 
-        # uncertainties of each point
-        self.E_nu = E_nu 
-    
+        """Independent composition fractions followed by energy; E_nu is variance.
+
+        For C components, points has C columns. Volume is measured in the
+        C-1 independent fraction coordinates, whose simplex volume is 1/(C-1)!.
+        The internal Qhull uses scaled formation energies; Area retains the
+        input energy units, and bt_hull_points retains the input coordinates.
+        """
+        self.points = np.asarray(points,dtype=float)
+        self.E_nu = np.asarray(E_nu,dtype=float)
+        if self.points.ndim != 2 or self.points.shape[1] < 2 or not len(self.points):
+            raise ValueError('points must contain composition columns and a final energy column')
+        if not np.all(np.isfinite(self.points)):
+            raise ValueError('points must be finite')
+        if np.any(self.points[:,:-1] < -1e-12) or np.any(self.points[:,:-1].sum(axis=1) > 1+1e-12):
+            raise ValueError('composition fractions must lie inside the composition simplex')
+        n = len(self.points)
+        if self.E_nu.shape not in ((),(n,),(n,1),(n,n)):
+            raise ValueError('E_nu must be a scalar variance, n variances, or an n by n covariance matrix')
+        if not np.all(np.isfinite(self.E_nu)):
+            raise ValueError('E_nu must be finite')
+        if self.E_nu.shape == (n,n):
+            if not np.allclose(self.E_nu,self.E_nu.T,rtol=1e-10,
+                               atol=64*np.finfo(float).eps*np.max(np.abs(self.E_nu))):
+                raise ValueError('E_nu covariance matrix must be symmetric')
+            if np.any(np.diag(self.E_nu) < 0):
+                raise ValueError('E_nu variances must be nonnegative')
+        elif np.any(self.E_nu < 0):
+            raise ValueError('E_nu variances must be nonnegative')
+
     def get_bottom_hull(self):
-        self.points.T[-1]
-        self.points.T
-        
+        # The pure-endmember plane closes the lower hull.
+        d = self.points.shape[1]-1
+        self.plane_zero_facets = []
+        for comp in np.vstack([np.zeros(d),np.eye(d)]):
+            index = np.flatnonzero(np.all(np.abs(self.points[:,:-1]-comp) <= 1e-12,axis=1))
+            if not len(index):
+                raise ValueError('points must include every pure endmember of the composition simplex')
+            self.plane_zero_facets.append(index[np.argmin(self.points[index,-1])])
+        self.plane_zero_facets = np.array(self.plane_zero_facets,dtype=int)
+        self.plane_zero_e = self.points[self.plane_zero_facets,-1]
+        self.plane_zero = (self.plane_zero_e[0] +
+                           np.dot(self.points[:,:-1],self.plane_zero_e[1:]-self.plane_zero_e[0]))
+        self.plane_zero[self.plane_zero_facets] = self.plane_zero_e
+        formation_energy = self.points[:,-1]-self.plane_zero
+        tolerance = 64*np.finfo(float).eps*max(np.max(np.abs(self.plane_zero_e)),
+                                             max(0.,-np.min(formation_energy)))
+        self.hull = None
+        self.final_simplices = np.empty((0,d+1),dtype=int)
+        self.bt_hull_index_all = []
+        self.bt_hull_vertices = np.array([],dtype=int)
+        self.bt_hull_points = self.points[self.bt_hull_vertices]
+        if not np.any(formation_energy < -tolerance):
+            # Coplanar/reference-only data have no volume and need no Qhull jitter.
+            return
+        index = np.flatnonzero(formation_energy <= tolerance)
+        # Scaling only the geometry avoids Qhull degeneracy for small energy
+        # units and large affine reference slopes; coefficients stay physical.
+        self.hull = ConvexHull(np.c_[self.points[index,:-1],
+                                    formation_energy[index]/np.max(np.abs(formation_energy[index]))])
+        # A lower facet has a negative outward normal in the energy direction.
+        self.final_simplices = index[self.hull.simplices[self.hull.equations[:,-2] < 0]]
+        self.bt_hull_vertices = np.unique(np.r_[self.final_simplices.ravel(),self.plane_zero_facets])
+        self.bt_hull_index_all = self.bt_hull_vertices.tolist()
+        self.bt_hull_points = self.points[self.bt_hull_vertices]
+
+    def shoelace_area(self):
+        from math import factorial
+        d = self.points.shape[1]-1
+        self.Area = 0.
+        self.var_Area = 0.
+        self.nu_Area = 0.
+        self.F_vector = np.zeros(len(self.bt_hull_index_all))
+        if not len(self.final_simplices):
+            return
+        # Integrate the affine reference minus each lower facet. A simplex
+        # integral is its projected volume times the mean of its vertex values.
+        F_vector = np.zeros(len(self.points))
+        F_vector[self.plane_zero_facets] = 1./factorial(d+1)
+        for facet in self.final_simplices:
+            comp = self.points[facet,:-1]
+            volume = abs(np.linalg.det(comp[1:]-comp[0]))/factorial(d)
+            F_vector[facet] -= volume/(d+1)
+            self.Area += volume*np.mean(self.plane_zero[facet]-self.points[facet,-1])
+        self.F_vector = F_vector[self.bt_hull_vertices]
+        # The hull topology is fixed; propagate the existing linear energy
+        # covariance without allocating a dense matrix for marginal variances.
+        if self.E_nu.ndim == 0:
+            self.var_Area = float(self.E_nu*np.dot(self.F_vector,self.F_vector))
+            variance_scale = self.var_Area
+        elif self.E_nu.shape != (len(self.points),len(self.points)):
+            self.var_Area = float(np.dot(self.F_vector**2,self.E_nu.ravel()[self.bt_hull_vertices]))
+            variance_scale = self.var_Area
+        else:
+            covariance = self.E_nu[np.ix_(self.bt_hull_vertices,self.bt_hull_vertices)]
+            self.var_Area = float(np.dot(np.dot(self.F_vector,covariance),self.F_vector))
+            variance_scale = np.dot(np.dot(np.abs(self.F_vector),np.abs(covariance)),np.abs(self.F_vector))
+        if self.var_Area < -64*np.finfo(float).eps*variance_scale:
+            raise ValueError('E_nu gives a negative propagated hull variance')
+        self.var_Area = max(0.,self.var_Area)
+        self.nu_Area = np.sqrt(self.var_Area)

@@ -15,7 +15,8 @@ class set_pool:
                 design_index,
                 selected_corrs,
                 Y_name,
-                ternary = False):
+                ternary = False,
+                comp_names = None):
 
         # data should include comp, corr(i)
         self.data = data
@@ -46,7 +47,12 @@ class set_pool:
             space_i['type'] = 'discrete'
             space_i['domain'] = (0,1)
             self.space.append(space_i)
-        if ternary: 
+        # For C components, provide C-1 independent composition columns.
+        # Omitting comp_names preserves the original binary/ternary interface.
+        if comp_names is not None:
+            self.train_comp = data.iloc[train_index][list(comp_names)]
+            self.design_comp = data.iloc[design_index][list(comp_names)]
+        elif ternary:
 
             self.train_comp = data.iloc[train_index][['comp(a)','comp(b)']]
             self.design_comp = data.iloc[design_index][['comp(a)','comp(b)']]
